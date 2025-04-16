@@ -1,0 +1,509 @@
+---
+title: "Final project"
+output: html_document
+---
+
+```{r}
+#Data Exploration
+house=read.csv("/Users/yangyixuan/desktop/newhouse.csv",header=TRUE)
+head(house)
+summary(house)
+
+```
+```{r}
+#Check the type of data
+#str(house)
+
+sum(house$yr_renovated!=0)
+```
+
+```{r}
+## Clean data 
+house$date <- NULL
+house$id <- NULL
+house$zipcode<- NULL
+house$X<-NULL
+house$price_range<-NULL
+```
+
+
+```{r}
+## Remove outlier
+## 
+remove_outliers <- function(x, na.rm = TRUE, ...) {  
+  qnt <- quantile(x, probs=c(.25, .75), na.rm = na.rm, ...)  
+  H <- 4 * IQR(x, na.rm = na.rm)  
+  y = 
+    y = c(which(x < (qnt[1] - H)),which(x > (qnt[2] + H)))
+  y
+}
+num = 0
+for(name  in names(house)){
+  if(grepl("sqft", name) || name == "price"){
+    outliers = remove_outliers(house[,name])
+    num = num + length(outliers)
+    data = house[-outliers,]
+  }
+}
+# Number of data removed
+print(house)
+## [1] 18999
+
+# Number of data still available
+print(nrow(data))
+## [1] 17776
+
+```
+
+```{r}
+##correlation check 
+cor_matrix = cor(data)
+cor_matrix[,"price"]
+
+```
+
+```{r}
+## The correlation map
+col<- colorRampPalette(c("blue", "white", "red"))(20)
+heatmap(x = cor_matrix, col = col, symm = TRUE)
+
+```
+
+
+
+
+```{r}
+### transfer numerical variable to category variable because we need to check the correct type of variables before do our model
+
+df$floor = factor(df$floor)
+df$view = factor(df$view)
+df$condition = factor(df$condition)
+df$waterfront = factor(df$waterfront)
+df=data
+```
+
+
+```{r}
+##Before running our model we need to split the training and test dataset 
+#源代码没有把house改成data, 所以还是以21613去算的,非20168
+sample = floor(0.7 * nrow(data))
+train1 = sample(seq_len(nrow(data)), size = sample)
+train = data[train1,]
+test = data[-train1,]
+train
+test
+```
+# fit the random forest
+
+```{r}
+library(randomForest)
+bag.cf1 = randomForest(price~., data=data,subset = train, mtry=17,  importance=TRUE)
+bag.cf1 
+```
+```{r}
+yhat.rf = predict(bag.cf1  ,newdata=data[-train ,])
+data.test=data[-train,"price"]
+mean((yhat.rf-data.test)^2)
+
+```
+```{r}
+importance(bag.cf1 )
+```
+```{r}
+varImpPlot(bag.cf1 )
+```
+```{r}
+library(randomForest)
+bag.cf2 = randomForest(price~., data=data,subset = train, mtry=6,  importance=TRUE)
+yhat.rf2 = predict(bag.cf2  ,newdata=data[-train ,])
+data.test=data[-train,"price"]
+mean((yhat.rf2-data.test)^2)
+```
+```{r}
+importance(bag.cf2 )
+varImpPlot(bag.cf2 )
+```
+
+
+
+
+
+
+```{r}
+## Forward 
+library(leaps)
+model1 <- regsubsets(price ~ ., data = train, nvmax = 17)#17variables
+model1#models containing all the predictors/independent vars
+model1_summary <- summary(model1)
+model1_summary
+```
+
+```{r}
+#Three ways to choose the best number of variables (which can be regarded as the best model)
+#R^2
+par(mfrow=c(2,2))
+plot(model1_summary$adjr2 ,xlab="Number of Variables ",
+ylab="Adjusted RSq",type="l")
+which.max(model1_summary$adjr2)#The which.max() function can be used to identify the location of the maximum point of a vector.The best model with maximum R^2, and the model with 5 var is the best with max R^2
+points(14,model1_summary$adjr2[14], col="red",cex=2,pch=20)
+
+#Cp
+plot(model1_summary$cp ,xlab="Number of Variables ",ylab="Cp", type="l")
+which.min(model1_summary$cp)
+points(14,model1_summary$cp[14], col="red",cex=2,pch=20)
+
+#BIC
+plot(model1_summary$bic ,xlab="Number of Variables ",ylab="BIC",
+type="l")
+which.min(model1_summary$bic)
+points(15,model1_summary$bic[15], col="red",cex=2,pch=20)
+
+#the coefficients of the best model obtained
+coef(model1 ,which.min(model1_summary$bic))
+
+```
+
+
+```{r}
+# Calculate the MSE
+x.test = model.matrix(price ~., data = test)
+coefi = coef(fw, id = 10)
+pred = x.test[ , names(coefi)] %*% coefi 
+#paste("Modele 10, RMSE = ",sqrt(mean((test$price - pred) ^ 2)))
+paste("Modele 10, MSE = ",mean((test$price - pred) ^ 2))
+```
+
+#Now fit a LASSO model with `glmnet` function from `glmnet` package to the simulated data. Use cross-validation to select the optimal value of $\lambda$. Create plots of the cross-validation error as a function of $\lambda$.
+
+```{r}
+library(glmnet)
+x.train=model.matrix(price~.,train)[,-1] #put regressors from training set into a matrix
+y.train=train$price #label for training set
+x.test=model.matrix(price~.,test)[,-1] #put regressors from test set into a matrix
+y.test=test$price #label for test set
+
+lasso.mod=glmnet(x.train,y.train,alpha=1) #build a lasso regression
+cv.out=cv.glmnet(x.train,y.train,alpha=1) # use 10 fold cv to select shrinkage parameter select lamda
+plot(cv.out)#Create plots of the cross-validation error as a function of λ. 
+bestlam_l=cv.out$lambda.min #find the best shrinkage parameter
+bestlam_l#309.7835
+
+
+lasso.pred=predict(lasso.mod,s=bestlam_l,newx=x.test) #making prediction using the best shrinkage parameter
+lasso.err=mean((lasso.pred-y.test)^2) #calculate MSE
+lasso.err#45960553178
+
+
+lasso.coef=predict(lasso.mod,type="coefficients",s=bestlam_l)
+lasso.coef
+#By using Lasso, coef of sqft_basement shrink to 0
+
+```
+#Fit a PCR model on the training set
+```{r}
+train=sample(nrow(data),size=0.7*nrow(data)) #select training70% and test data
+test=-(train)
+```
+
+```{r}
+##PCR
+library(pls)
+set.seed (2)
+pcr.fit=pcr(price~., data=data,subset=train ,scale=TRUE,
+validation ="CV",segments = 10)#Fit a PCR model on the training set, with Model chosen by 10-fold cross-validation
+summary(pcr.fit)
+validationplot(pcr.fit,val.type="MSEP")
+
+pcr.pred=predict(pcr.fit,x.test,ncomp=17)
+mean((pcr.pred-y.test)^2)
+
+
+```
+```{r}
+##PLS
+library(pls)
+set.seed (122)
+pls.fit=plsr(price~., data=data,subset=train ,scale=TRUE,
+validation ="CV",segments = 10)#Fit a PCR model on the training set, with Model chosen by 10-fold cross-validation
+summary(pls.fit)
+validationplot(pls.fit,val.type="MSEP")
+
+
+#pls.pred=predict(pls.fit,x.test,ncomp=17)
+#mean((pls.pred-y.test)^2)
+```
+```{r}
+pls.pred=predict(pls.fit,x.test,ncomp=9)
+mean((pls.pred-y.test)^2)
+```
+```{r}
+pls.fit1=plsr(price~., data=data,subset=train ,scale=TRUE,ncomp=9)#Fit a PCR model on the training set, with Model chosen by 10-fold cross-validation
+summary(pls.fit1)
+```
+
+
+
+
+
+
+#Fit a ridge regression model on the training set, with $\lambda$ chosen by 10-fold cross-validation. Report the test error obtained.
+```{r}
+ridge.mod=glmnet(x.train,y.train,alpha=0)
+cv.out=cv.glmnet(x.train,y.train,alpha=0) # use 10 fold cv to select shrinkage parameter select lamda
+cv.out
+
+bestlam_r=cv.out$lambda.min #find the best shrinkage parameter
+bestlam_r#optimal value of lamda 25760.56
+
+ridge.pred=predict(ridge.mod,s=bestlam_r,newx=x.test) #making prediction using the best shrinkage parameter(optimal lamda into test data)
+ridge.err=mean((ridge.pred-y.test)^2) #calculate MSE
+ridge.err#test error is 41567044147
+
+ridge.coef=predict(ridge.mod,type="coefficients",s=bestlam_r)
+ridge.coef
+```
+
+
+
+
+
+```{r}
+lm.fit=lm(price~.,data=data ,subset=train) 
+summary(lm.fit)
+lm.pred=predict(lm.fit,newx=x.test)
+lm.err=mean((lm.pred-y.test)^2)
+lm.err
+
+
+```
+```{r}
+lm.fit=lm(price~.-sqft_above ,data=data ,subset=train) 
+summary(lm.fit)
+lm.pred=predict(lm.fit,newx=x.test)
+lm.err=mean((lm.pred-y.test)^2)
+lm.err
+```
+
+
+
+
+
+
+
+
+
+
+
+
+#classification
+#develop a model to predict whether the house gets high or low price
+#Create a binary variable, `price01`, that contains a 1 if `price` contains a value above its median, and a 0 if `price` contains a value below its median
+```{r}
+data$price01 = rep(0, length(data$price))
+data$price01[data$price>median(data$price)] = 1
+data<- data.frame(data, data$price01)
+head(data)
+median(data$price)
+summary(data$price)
+
+```
+
+```{r}
+#前面改成了factor,所以run不出来, 如果是numerical可以run出来,并且得出结果#From the boxplot, bathrooms,sqft_living,grade,sqft_above,yr_built,sqft_living15,are good features in predicting price
+boxplot(data$bedrooms~house$price)
+boxplot(house$bathrooms~house$price)
+boxplot(house$sqft_living~house$price)
+boxplot(house$sqft_lot~house$price)
+boxplot(house$floors~house$price)
+boxplot(house$waterfront~house$price)
+boxplot(house$view~house$price)
+boxplot(house$condition~house$price)
+boxplot(house$grade~house$price)
+boxplot(house$sqft_above~house$price)
+boxplot(house$sqft_basement~house$price)
+boxplot(house$yr_built~house$price)
+boxplot(house$sqft_living15~house$price)
+boxplot(house$sqft_lot15~house$price)
+
+```
+```{r}
+data
+```
+
+```{r}
+#logistiic regression
+library(leaps)
+library(glmnet)
+library(ISLR)
+library(pls) 
+
+train=sample(nrow(data),size=0.7*nrow(data)) #select training70% and test data
+test=-train #select test30% data
+train.price01=data$price01[train]
+test.price01=data$price01[test]
+
+glm.fit=glm(price01~bathrooms+sqft_living+grade+sqft_above+yr_built+sqft_living15,data=data,subset=train,family="binomial")
+glm.fit
+
+glm.probs=predict(glm.fit,type="response") 
+
+glm.pred=rep(0,6051)#There are 6051 obs in test data
+glm.pred[glm.probs>0.5]=1
+table(glm.pred, test.price01) #我好窒息, 为什么就卡死在这里啊啊嗷嗷
+mean(glm.pred == test.price01)#The test error rate is %
+
+```
+
+```{r}
+#LDA
+library(MASS)
+library(class)
+library(caret)
+library(e1071)
+library(ISLR)
+lda.fit2=lda(price01~bathrooms+sqft_living+grade+sqft_above+yr_built+sqft_living15,data=data,subset=train) 
+lda.fit2
+
+lda.pred2=predict(lda.fit2, test) 
+lda.class2=lda.pred2$class #access prediction label
+
+table(lda.class2,test.price01) 
+mean(lda.class2==test.price01) #The test error rate is 88.14%
+
+```
+
+```{r}
+#QDA
+qda.fit3=qda(price01~bathrooms+sqft_living+grade+sqft_above+yr_built+sqft_living15,data=data,subset=train) 
+qda.fit3
+
+qda.pred3=predict(qda.fit3, test) 
+qda.class3=qda.pred3$class #access prediction label
+
+table(qda.class3,test.price01) 
+mean(qda.class3==test.price01) #The test error rate is 88.98%
+
+```
+
+```{r}
+#KNN
+library(class)
+
+train.X=data[train,c("bathrooms","sqft_living","grade","sqft_above","yr_built","sqft_living15")]
+test.X=data[test,c("bathrooms","sqft_living","grade","sqft_above","yr_built","sqft_living15")]
+train.price01=data$price01[train]
+test.price01=data$price01[test]
+
+set.seed(1)
+knn.pred = knn(train.X, test.X, train.price01, k = 1)
+table(knn.pred, test.price01)
+#0.6978717
+
+```
+
+```{r}
+knn.pred1 = knn(train.X, test.X, train.price01, k = 2)
+table(knn.pred1, test.price01)
+(2083+2028)/(2083+2028+998+942)
+
+```
+
+```{r}
+knn.pred2 = knn(train.X, test.X, train.price01, k = 4)
+table(knn.pred2, test.price01)
+
+
+```
+
+```{r}
+trControl=trainControl(method  = "cv",number  = 10) 
+knn.fit <- train(price01~., 
+             method     = "knn", 
+             tuneGrid   = expand.grid(k = 1:10), 
+             preProcess = c("center","scale"),
+             trControl  = trControl,
+             metric     = "accuracy", 
+             data       = data[train,]) 
+knn.fit
+
+```
+
+
+```{r}
+data
+```
+
+#Tree-based Methods
+
+#Fit a tree to the training data, with `price` as the response and the other variables as predictors.
+```{r}
+
+data$price[data$price>=median(data$price)] = 1
+data$price[data$price<median(data$price)] = 0
+
+library(tree)
+tree.newhou<- tree(price~., data = train)
+summary(tree.newhou)
+#Number of terminal nodes: 11 
+```
+
+```{r}
+tree.newhou
+```
+
+
+```{r}
+plot(tree.newhou)
+text(tree.newhou, pretty = 0)
+
+```
+
+```{r}
+library("class")
+library("e1071")
+library("splines")
+library("ISLR")
+tree.pred = predict(tree.newhou, data.test, type = "class")
+table(tree.pred, newhou.test)
+```
+
+```{r}
+cv.newhou =cv.tree(tree.newhou ,FUN=prune.misclass )
+names(cv.newhou)
+cv.newhou
+```
+
+#Perform random forest on the training set with $\sqrt{p}$ and $p/3$ predictors respectively and report the prediction performance on the test set.
+```{r}
+library(tree)
+library(ISLR)
+library(MASS)
+rf.newhou=randomForest(price~.,data=data,subset=train,mtry=18,importance =TRUE)
+
+yhat.rf = predict(rf.data ,newdata=data[-train ,])
+mean((yhat.rf-data.test)^2)
+importance (rf.newhou)
+```
+
+
+#SVM
+#Fit a support vector classifier to the training data with various values of `cost`, in order to predict whether a car gets high or low gas mileage
+```{r}
+tune.out=tune(svm,price01~.,data=train,kernel="linear",ranges = list(cost=c(0.001, 0.01, 0.1, 1,5,10,100)))
+summary(tune.out)
+```
+
+```{r}
+svmfit=svm(price01~., data=data[train,], kernel="linear", cost=1)
+summary(svmfit)
+```
+
+
+```{r}
+test_pred=predict(tune.out$best.model,newdata=data[test,])
+confusionMatrix(test_pred,data[test,]$price01)
+```
+
+```{r}
+plot(svmfit,data[train,] )
+```
